@@ -3,114 +3,128 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
-from datetime import datetime
-from pytz import timezone
 import nltk
+import logging
 
-# Download necessary NLTK data
 nltk.download('punkt')
 nltk.download('averaged_perceptron_tagger')
 
 app = Flask(__name__)
-CORS(app, origins="http://localhost:5173")
+CORS(app, origins=["http://localhost:5173"])
 
-class Data:
-    def __init__(self, course_name, credits, difficulty, current_grade, study_hours, recommended_hours=0):
+logging.basicConfig(level=logging.INFO)
+
+class ClassData:
+    def __init__(self, course_name, credits, difficulty, current_grade, study_hours):
         self.course_name = course_name
         self.credits = credits
         self.difficulty = difficulty
         self.current_grade = current_grade
         self.study_hours = study_hours
-        self.recommended_hours = recommended_hours
+        self.recommended_hours = 0  
 
-def read_csv(file_path):
-    data_list = []
-    with open(file_path, newline='') as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            data_list.append(Data(
-                row['course_name'],
-                float(row['credits']),
-                float(row['difficulty']),
-                float(row['current_grade']),
-                float(row['study_hours'])
-            ))
-    return data_list
-
-def write_csv(file_path, data_list):
-    with open(file_path, 'w', newline='') as csvfile:
-        fieldnames = ['course_name', 'credits', 'difficulty', 'current_grade', 'study_hours', 'recommended_hours']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-
-        writer.writeheader()
-        for data in data_list:
-            writer.writerow({
-                'course_name': data.course_name,
-                'credits': data.credits,
-                'difficulty': data.difficulty,
-                'current_grade': data.current_grade,
-                'study_hours': data.study_hours,
-                'recommended_hours': data.recommended_hours
-            })
-
-def train_model(data_list):
-    X = [[d.credits, d.difficulty, d.current_grade] for d in data_list]
-    y = [d.study_hours for d in data_list]
-
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    model = MLPRegressor(max_iter=1000)
-    model.fit(X_scaled, y)
+class Chatbot:
+    def __init__(self):
+        self.model = MLPRegressor(hidden_layer_sizes=(100,), activation='relu', solver='adam', max_iter=1000)
+        self.scaler = StandardScaler()
+        self.is_fitted = False
+        self.classes = []
     
-    return model, scaler
+    def read_csv(self, file_path):
+        self.classes = []  
+        with open(file_path, newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                self.classes.append(ClassData(
+                    row['course_name'],
+                    float(row['credits']),
+                    float(row['difficulty']),
+                    float(row['current_grade']),
+                    float(row['study_hours'])
+                ))
+        self.update_model()
 
-def get_study_hours_recommendations(model, scaler, credits, difficulty, current_grade, study_hours):
-    input_features = scaler.transform([[credits, difficulty, current_grade]])
-    recommended_hours = model.predict(input_features)[0]
+    def write_csv(self, file_path):
+        with open(file_path, 'w', newline='') as csvfile:
+            fieldnames = ['course_name', 'credits', 'difficulty', 'current_grade', 'study_hours', 'recommended_hours']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for data in self.classes:
+                writer.writerow({
+                    'course_name': data.course_name,
+                    'credits': data.credits,
+                    'difficulty': data.difficulty,
+                    'current_grade': data.current_grade,
+                    'study_hours': data.study_hours,
+                    'recommended_hours': data.recommended_hours
+                })
 
-    grade_gap = 100 - current_grade
-    difficulty_factor = difficulty / 10
-    additional_hours = grade_gap * 0.5 * difficulty_factor
-    recommended_hours = max(recommended_hours + additional_hours, study_hours + 1)
+    def update_model(self):
+        X = [[data.credits, data.difficulty, data.current_grade] for data in self.classes]
+        y = [data.study_hours for data in self.classes]
+        self.scaler.fit(X)  
+        X_scaled = self.scaler.transform(X)
+        self.model.fit(X_scaled, y)
+        self.is_fitted = True
 
-    # Round off the recommended hours by half-hour intervals
-    rounded_hours = round(recommended_hours * 2) / 2
+    def get_study_hours_recommendations(self, data):
+        if not self.is_fitted:
+            raise Exception("No data to make recommendations. Please add some class data first!")
+        
+        input_features = self.scaler.transform([[data.credits, data.difficulty, data.current_grade]])
+        predicted_hours = self.model.predict(input_features)[0]
+        
+        grade_gap = 100 - data.current_grade
+        difficulty_factor = data.difficulty / 10
+        additional_hours = grade_gap * 0.5 * difficulty_factor
+        recommended_hours = max(predicted_hours + additional_hours, data.study_hours + 1)
+        
+        rounded_hours = round(recommended_hours * 2) / 2
+        
+        return rounded_hours
 
-    return rounded_hours
-
-# Read data from CSV and train the model
+chatbot = Chatbot()
 file_path = 'class_data.csv'
-data_list = read_csv(file_path)
-model, scaler = train_model(data_list)
-is_fitted = True
 
 @app.route('/recommended_study_hours', methods=['POST'])
 def recommended_study_hours():
+    global chatbot, file_path
     data = request.json
-    course_name = data.get('course_ID')
-    credits = data.get('credits')
-    difficulty = data.get('difficulty_level')
-    current_grade = data.get('current_grade')
-    study_hours = data.get('actual_study_hours')
 
-    if not is_fitted:
-        return jsonify({"error": "Model is not fitted. Please add some class data first!"}), 500
+    if not isinstance(data, list):
+        return jsonify({"error": "Input data should be a list of courses!"}), 400
 
-    recommended_hours = get_study_hours_recommendations(model, scaler, credits, difficulty, current_grade, study_hours)
-    
-    # Update the data_list and write to CSV
-    for d in data_list:
-        if d.course_name == course_name:
-            d.recommended_hours = recommended_hours
-            break
-    else:
-        # If course not found, add it
-        data_list.append(Data(course_name, credits, difficulty, current_grade, study_hours, recommended_hours))
+    recommended_hours_list = []
 
-    write_csv(file_path, data_list)
-    
-    return jsonify({"recommended_hours": recommended_hours})
+    # Re-read the CSV file so that the model is trained with the latest data
+    chatbot.read_csv(file_path)
+
+    for course in data:
+        course_name = course.get('course_ID')
+        credits = course.get('credits')
+        difficulty = course.get('difficulty_level')
+        current_grade = course.get('current_grade')
+        study_hours = course.get('actual_study_hours')
+
+        if not all([course_name, credits, difficulty, current_grade, study_hours]):
+            return jsonify({"error": "Missing or invalid data fields for course: {}".format(course_name)}), 400
+
+        # temporary ClassData object for current request
+        temp_data = ClassData(course_name, credits, difficulty, current_grade, study_hours)
+        
+        # study hours recommendations for the new data
+        try:
+            temp_data.recommended_hours = chatbot.get_study_hours_recommendations(temp_data)
+        except Exception as e:
+            logging.error(f"Error in getting study hours recommendations for course {course_name}: {e}")
+            return jsonify({"error": str(e)}), 500
+
+        recommended_hours_list.append({
+            "course_ID": course_name,
+            "recommended_hours": temp_data.recommended_hours
+        })
+
+    return jsonify({"recommended_hours": recommended_hours_list})
 
 if __name__ == '__main__':
     app.run(debug=True)
