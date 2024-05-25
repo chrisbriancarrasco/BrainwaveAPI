@@ -5,6 +5,8 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
 import nltk
 import logging
+import joblib
+import os
 
 nltk.download('punkt')
 nltk.download('averaged_perceptron_tagger')
@@ -15,8 +17,7 @@ CORS(app, origins=["http://localhost:5173"])
 logging.basicConfig(level=logging.INFO)
 
 class ClassData:
-    def __init__(self, course_name, credits, difficulty, current_grade, study_hours):
-        self.course_name = course_name
+    def __init__(self, credits, difficulty, current_grade, study_hours):
         self.credits = credits
         self.difficulty = difficulty
         self.current_grade = current_grade
@@ -25,7 +26,7 @@ class ClassData:
 
 class Chatbot:
     def __init__(self):
-        self.model = MLPRegressor(hidden_layer_sizes=(100,), activation='relu', solver='adam', max_iter=1000)
+        self.model = MLPRegressor(hidden_layer_sizes=(100,), activation='relu', solver='adam', max_iter=1000, random_state=42)
         self.scaler = StandardScaler()
         self.is_fitted = False
         self.classes = []
@@ -36,28 +37,11 @@ class Chatbot:
             reader = csv.DictReader(csvfile)
             for row in reader:
                 self.classes.append(ClassData(
-                    row['course_name'],
                     float(row['credits']),
                     float(row['difficulty']),
                     float(row['current_grade']),
                     float(row['study_hours'])
                 ))
-        self.update_model()
-
-    def write_csv(self, file_path):
-        with open(file_path, 'w', newline='') as csvfile:
-            fieldnames = ['course_name', 'credits', 'difficulty', 'current_grade', 'study_hours', 'recommended_hours']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            for data in self.classes:
-                writer.writerow({
-                    'course_name': data.course_name,
-                    'credits': data.credits,
-                    'difficulty': data.difficulty,
-                    'current_grade': data.current_grade,
-                    'study_hours': data.study_hours,
-                    'recommended_hours': data.recommended_hours
-                })
 
     def update_model(self):
         X = [[data.credits, data.difficulty, data.current_grade] for data in self.classes]
@@ -69,22 +53,20 @@ class Chatbot:
 
     def get_study_hours_recommendations(self, data):
         if not self.is_fitted:
-            raise Exception("No data to make recommendations. Please add some class data first!")
+            raise Exception("Model is not fitted. Please add some class data first!")
         
         input_features = self.scaler.transform([[data.credits, data.difficulty, data.current_grade]])
-        predicted_hours = self.model.predict(input_features)[0]
-        
+        data.recommended_hours = self.model.predict(input_features)[0]
         grade_gap = 100 - data.current_grade
         difficulty_factor = data.difficulty / 10
         additional_hours = grade_gap * 0.5 * difficulty_factor
-        recommended_hours = max(predicted_hours + additional_hours, data.study_hours + 1)
-        
+        recommended_hours = max(data.recommended_hours + additional_hours, data.study_hours + 1)
         rounded_hours = round(recommended_hours * 2) / 2
-        
+
         return rounded_hours
 
 chatbot = Chatbot()
-file_path = 'class_data.csv'
+file_path = 'data.csv'
 
 @app.route('/recommended_study_hours', methods=['POST'])
 def recommended_study_hours():
@@ -96,9 +78,6 @@ def recommended_study_hours():
 
     recommended_hours_list = []
 
-    # Re-read the CSV file so that the model is trained with the latest data
-    chatbot.read_csv(file_path)
-
     for course in data:
         course_name = course.get('course_ID')
         credits = course.get('credits')
@@ -109,10 +88,11 @@ def recommended_study_hours():
         if not all([course_name, credits, difficulty, current_grade, study_hours]):
             return jsonify({"error": "Missing or invalid data fields for course: {}".format(course_name)}), 400
 
-        # temporary ClassData object for current request
-        temp_data = ClassData(course_name, credits, difficulty, current_grade, study_hours)
+        temp_data = ClassData(credits, difficulty, current_grade, study_hours)
         
-        # study hours recommendations for the new data
+        chatbot.read_csv(course_name + '_' + file_path)
+        chatbot.update_model()
+        
         try:
             temp_data.recommended_hours = chatbot.get_study_hours_recommendations(temp_data)
         except Exception as e:
