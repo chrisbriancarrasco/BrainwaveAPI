@@ -3,13 +3,12 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
-import nltk
+from sklearn.metrics import mean_squared_error
+import numpy as np
 import logging
 import joblib
 import os
-
-nltk.download('punkt')
-nltk.download('averaged_perceptron_tagger')
+import json
 
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:5173"])
@@ -18,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 
 class ClassData:
     def __init__(self, credits, difficulty, current_grade, study_hours):
-        self.credits = credits
+        #self.credits = credits
         self.difficulty = difficulty
         self.current_grade = current_grade
         self.study_hours = study_hours
@@ -42,28 +41,32 @@ class Chatbot:
                     float(row['current_grade']),
                     float(row['study_hours'])
                 ))
-
+        
     def update_model(self):
-        X = [[data.credits, data.difficulty, data.current_grade] for data in self.classes]
-        y = [data.study_hours for data in self.classes]
-        self.scaler.fit(X)  
-        X_scaled = self.scaler.transform(X)
-        self.model.fit(X_scaled, y)
-        self.is_fitted = True
+        X = np.array([[data.difficulty, data.current_grade] for data in self.classes]) #data.credits, 
+        y = np.array([data.study_hours for data in self.classes])
+        # #print(49, X, y)
+        # self.scaler.fit(X)  
+        # X_scaled = self.scaler.transform(X)
+        # self.model.fit(X_scaled, y)
+        # #self.is_fitted = True
+        # Create the MLPRegressor model
+        self.mlp = MLPRegressor(hidden_layer_sizes=(100,), activation='relu', solver='adam', max_iter=500, random_state=42)
+
+        # Train the model
+        self.mlp.fit(X, y)
+
+        
 
     def get_study_hours_recommendations(self, data):
-        if not self.is_fitted:
-            raise Exception("Model is not fitted. Please add some class data first!")
-        
-        input_features = self.scaler.transform([[data.credits, data.difficulty, data.current_grade]])
-        data.recommended_hours = self.model.predict(input_features)[0]
-        grade_gap = 100 - data.current_grade
-        difficulty_factor = data.difficulty / 10
-        additional_hours = grade_gap * 0.5 * difficulty_factor
-        recommended_hours = max(data.recommended_hours + additional_hours, data.study_hours + 1)
-        rounded_hours = round(recommended_hours * 2) / 2
-
-        return rounded_hours
+        #given their assesment of difficulty, est
+        X_input = np.array([[data.difficulty, 100.0]])
+        y_pred = self.mlp.predict(X_input)
+        # return rounded_hours
+        rounded_hours = np.round(y_pred * 2) / 2  # Round to nearest half hour
+        #return y_pred[0]
+        #return rounded_hours
+        return float(rounded_hours[0])
 
 chatbot = Chatbot()
 file_path = 'data.csv'
@@ -80,7 +83,7 @@ def recommended_study_hours():
 
     for course in data:
         course_name = course.get('course_ID')
-        credits = course.get('credits')
+        #credits = course.get('credits')
         difficulty = course.get('difficulty_level')
         current_grade = course.get('current_grade')
         study_hours = course.get('actual_study_hours')
