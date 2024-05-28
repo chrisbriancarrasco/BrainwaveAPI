@@ -1,7 +1,7 @@
-credits,difficulty,current_grade,study_hours
-3,10,65,5
-3,9,70,6
-3,7,84,7
-3,7,87,9
-3,8,94,8
-3,7,95,9
+difficulty,current_grade,study_hours
+10,65,5
+9,70,6
+7,84,7
+7,87,9
+8,94,8
+7,95,9
