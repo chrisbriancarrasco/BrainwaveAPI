@@ -11,7 +11,6 @@ logging.basicConfig(level=logging.INFO)
 
 chatbot = Chatbot()
 
-
 @app.route('/recommended_study_hours', methods=['POST'])
 def recommended_study_hours():
     global chatbot
@@ -24,28 +23,26 @@ def recommended_study_hours():
 
     for course in data:
         course_name = course.get('course_name')
-        difficulty = course.get('difficulty_level')
-        current_grade = course.get('current_grade')
-        study_hours = course.get('actual_study_hours')
-
-        if not all([course_name, difficulty, current_grade, study_hours]): 
-            return jsonify({"error": "Missing or invalid data fields for course: {}".format(course_name)}), 400
-
-        temp_data = ClassData(difficulty, current_grade, study_hours) 
-        
-        
         try:
+            if not ClassData.is_valid_course_name(course_name):
+                return jsonify({"error": "Invalid course name."}), 400
+
+            difficulty = course.get('difficulty_level')
+            
+            if not ClassData.is_valid_difficulty(difficulty):
+                return jsonify({"error": "Invalid difficulty."}), 400
+            
             chatbot.load(course_name)
             chatbot.update_model()
-            temp_data.recommended_hours = chatbot.get_study_hours_recommendations(temp_data)
+            recommended_hours = chatbot.get_study_hours_recommendations(difficulty)
+
+            recommended_hours_list.append({
+                "course_name": course_name,
+                "recommended_hours": recommended_hours
+            })
         except Exception as e:
             logging.error(f"Error in getting study hours recommendations for course {course_name}: {e}")
-            return jsonify({"error": str(e)}), 500
-
-        recommended_hours_list.append({
-            "course_name": course_name,
-            "recommended_hours": temp_data.recommended_hours
-        })
+            return jsonify({"error": str(e)}), 400
 
     return jsonify({"recommended_hours": recommended_hours_list})
 
@@ -75,6 +72,10 @@ def add_course_data():
     course = request.json
 
     course_name = course.get('course_name')
+    
+    if not ClassData.is_valid_course_name(course_name):
+        return jsonify({"error": "Invalid course name."}), 400
+    
     difficulty = course.get('difficulty_level')
     current_grade = course.get('current_grade')
     study_hours = course.get('actual_study_hours')
@@ -82,11 +83,14 @@ def add_course_data():
     if not all([course_name, difficulty, current_grade, study_hours]): 
         return jsonify({"error": "Missing or invalid data fields for course: {}".format(course_name)}), 400
 
-    temp_data = ClassData(difficulty, current_grade, study_hours) 
-    chatbot.add_data(course_name, temp_data)
+    try:
+        temp_data = ClassData(difficulty, current_grade, study_hours) 
+        chatbot.add_data(course_name, temp_data)
+    except Exception as e:
+        logging.error(str(e))
+        return jsonify({"error": str(e)}), 400 
     
     return jsonify({"Messsage": "Data added."})
-
 
 if __name__ == '__main__':
     app.run(debug=True)

@@ -57,9 +57,9 @@ class Chatbot:
         # Train the model
         self.mlp.fit(X, y)
 
-    def get_study_hours_recommendations(self, data):
+    def get_study_hours_recommendations(self, difficulty):
         #given their assesment of difficulty, est
-        X_input = np.array([[data.difficulty, 100.0]])
+        X_input = np.array([[difficulty, 100.0]])
         y_pred = self.mlp.predict(X_input)
         
         rounded_hours = np.round(y_pred * 2) / 2  # Round to nearest half hour
